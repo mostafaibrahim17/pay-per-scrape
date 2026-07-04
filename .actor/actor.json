@@ -1,0 +1,14 @@
+{
+	"$schema": "https://apify.com/schemas/v1/actor.ide.json",
+	"actorSpecification": 1,
+	"name": "pay-per-scrape",
+	"title": "Pay Per Scrape",
+	"description": "A paid web scraping Actor that accepts x402 USDC payments from AI agents and returns scraped content.",
+	"version": "0.0",
+	"buildTag": "latest",
+	"meta": {
+		"templateId": "ts-empty",
+		"generatedBy": "<FILL-IN-MODEL>"
+	},
+	"dockerfile": "../Dockerfile"
+}
