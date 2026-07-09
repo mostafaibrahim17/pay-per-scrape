@@ -5,11 +5,11 @@ import { base } from 'viem/chains';
 
 interface X402Receipt {
   txHash: `0x${string}`;
-  payer: string;
-  amount: bigint;
-  recipient: string;
+  payer: string;      // informational only, the real payer is read on-chain
+  amount: bigint;     // informational only, the real amount is read on-chain
+  recipient: string;  // informational only, the real recipient is read on-chain
   nonce: string;
-  timestamp: number;
+  timestamp: number;  // unix seconds
 }
 
 const client = createPublicClient({
@@ -23,20 +23,26 @@ const TRANSFER_ABI = parseAbiItem(
   'event Transfer(address indexed from, address indexed to, uint256 value)'
 );
 
-async function verifyReceipt(receipt: X402Receipt): Promise<boolean> {
+interface VerifiedPayment {
+  ok: boolean;
+  onChainPayer?: string;
+  onChainAmount?: bigint;
+}
+
+async function verifyReceipt(receipt: X402Receipt): Promise<VerifiedPayment> {
   const { txHash, nonce, timestamp } = receipt;
 
   const alreadyUsed = await Actor.getValue(nonce);
   if (alreadyUsed) {
     log.info(`Rejected: receipt already used - ${nonce}`);
-    return false;
+    return { ok: false };
   }
 
   const age = Math.floor(Date.now() / 1000) - timestamp;
   const maxAge = Number(process.env.MAX_RECEIPT_AGE_SECONDS ?? 300);
   if (age > maxAge) {
     log.info(`Rejected: receipt is ${age}s old`);
-    return false;
+    return { ok: false };
   }
 
   let tx = null;
@@ -51,7 +57,7 @@ async function verifyReceipt(receipt: X402Receipt): Promise<boolean> {
 
   if (!tx || tx.status !== 'success') {
     log.info(`Rejected: transaction not found - ${txHash}`);
-    return false;
+    return { ok: false };
   }
 
   const transferLog = tx.logs.find(
@@ -60,9 +66,10 @@ async function verifyReceipt(receipt: X402Receipt): Promise<boolean> {
 
   if (!transferLog) {
     log.info('Rejected: no USDC transfer found in transaction logs');
-    return false;
+    return { ok: false };
   }
 
+  let actualFrom: string;
   let actualTo: string;
   let actualValue: bigint;
 
@@ -72,11 +79,12 @@ async function verifyReceipt(receipt: X402Receipt): Promise<boolean> {
       data: transferLog.data,
       topics: transferLog.topics,
     });
+    actualFrom = (decoded.args as any).from as string;
     actualTo = (decoded.args as any).to as string;
     actualValue = (decoded.args as any).value as bigint;
   } catch {
     log.info('Rejected: could not decode USDC transfer log');
-    return false;
+    return { ok: false };
   }
 
   const minPayment = BigInt(process.env.MIN_PAYMENT_USDC ?? '1000000');
@@ -85,10 +93,12 @@ async function verifyReceipt(receipt: X402Receipt): Promise<boolean> {
 
   if (!correctRecipient || !enoughPaid) {
     log.info(`Rejected: on-chain recipient ok=${correctRecipient}, amount ok=${enoughPaid}`);
-    return false;
+    return { ok: false };
   }
 
-  return true;
+  // Return the values read from the blockchain, not the agent's claims,
+  // so the handler logs what actually happened on-chain.
+  return { ok: true, onChainPayer: actualFrom, onChainAmount: actualValue };
 }
 
 Actor.main(async () => {
@@ -103,12 +113,16 @@ Actor.main(async () => {
 
   const { url, receipt } = input;
 
-  const valid = await verifyReceipt(receipt);
-  if (!valid) {
+  const payment = await verifyReceipt(receipt);
+  if (!payment.ok) {
     await Actor.setValue('result', { error: 'Payment check failed' });
     return;
   }
 
+  // Mark the nonce as used before scraping, not after.
+  // If the scrape crashes, the receipt is already burned.
+  // The agent resubmits with a new payment. Marking it after
+  // would let a crash turn into a free retry.
   await Actor.setValue(receipt.nonce, true);
 
   const pageText: string[] = [];
@@ -126,8 +140,8 @@ Actor.main(async () => {
 
   await Actor.pushData({
     url,
-    payer: receipt.payer,
-    amountUsdc: (Number(receipt.amount) / 1_000_000).toFixed(6),
+    payer: payment.onChainPayer,
+    amountUsdc: (Number(payment.onChainAmount) / 1_000_000).toFixed(6),
     txHash: receipt.txHash,
     nonce: receipt.nonce,
     scrapedAt: new Date().toISOString(),
