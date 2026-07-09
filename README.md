@@ -36,38 +36,38 @@ Running it on the **[Apify platform](https://apify.com)** gives you API access, 
 sequenceDiagram
     participant Agent as AI Agent
     participant Base as Base blockchain
-    participant Actor as Pay Per Scrape Actor
+    participant PPS as Pay Per Scrape
     participant Site as Target website
 
     Agent->>Base: 1. Send USDC payment (x402)
     Base-->>Agent: 2. Transaction hash + receipt
-    Agent->>Actor: 3. Run with { url, receipt }
-    Actor->>Actor: 4. Nonce unused? Receipt fresh?
-    Actor->>Base: 5. Fetch tx receipt, decode USDC Transfer
-    Base-->>Actor: 6. Real payer / amount / recipient
-    Actor->>Actor: 7. Recipient == wallet? Amount >= min?
-    Actor->>Site: 8. Scrape the URL (Cheerio)
-    Site-->>Actor: 9. HTML
-    Actor-->>Agent: 10. Clean text + payment metadata
+    Agent->>PPS: 3. Run with url + receipt
+    PPS->>PPS: 4. Nonce unused? Receipt fresh?
+    PPS->>Base: 5. Fetch tx receipt, decode USDC Transfer
+    Base-->>PPS: 6. Real payer / amount / recipient
+    PPS->>PPS: 7. Recipient == wallet? Amount >= min?
+    PPS->>Site: 8. Scrape the URL (Cheerio)
+    Site-->>PPS: 9. HTML
+    PPS-->>Agent: 10. Clean text + payment metadata
 ```
 
 ### Verification checks (all must pass)
 
 ```mermaid
 flowchart TD
-    A[Receipt received] --> B{Nonce already used?}
-    B -- yes --> R[❌ Reject]
-    B -- no --> C{Receipt older than max age?}
+    A[Receipt received] --> B{"Nonce already used?"}
+    B -- yes --> R[Reject]
+    B -- no --> C{"Receipt older than max age?"}
     C -- yes --> R
-    C -- no --> D{Tx found & status = success?}
+    C -- no --> D{"Tx found and status success?"}
     D -- no --> R
-    D -- yes --> E{USDC Transfer in logs?}
+    D -- yes --> E{"USDC Transfer in logs?"}
     E -- no --> R
-    E -- yes --> F{Recipient == your wallet?}
+    E -- yes --> F{"Recipient is your wallet?"}
     F -- no --> R
-    F -- yes --> G{Amount >= minimum?}
+    F -- yes --> G{"Amount at least the minimum?"}
     G -- no --> R
-    G -- yes --> S[✅ Burn nonce, then scrape]
+    G -- yes --> S[Burn nonce, then scrape]
 ```
 
 > **Why burn the nonce *before* scraping?** If the scrape crashes after payment, the receipt is already spent — a crash can't be turned into a free retry. The agent simply pays again with a fresh receipt.
